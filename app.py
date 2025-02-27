@@ -3,15 +3,15 @@ import os
 import dotenv
 import uuid
 
-# check if it's linux so it works on Streamlit Cloud
 if os.name == 'posix':
     __import__('pysqlite3')
     import sys
     sys.modules['sqlite3'] = sys.modules.pop('pysqlite3')
 
-from langchain_openai import ChatOpenAI, AzureChatOpenAI
+from langchain_openai import ChatOpenAI
 from langchain_anthropic import ChatAnthropic
 from langchain.schema import HumanMessage, AIMessage
+from langchain_google_genai  import ChatGoogleGenerativeAI
 
 from rag_methods import (
     load_doc_to_db, 
@@ -28,9 +28,10 @@ if "AZ_OPENAI_API_KEY" not in os.environ:
         "openai/gpt-4o",
         # "openai/gpt-4o-mini",
         "anthropic/claude-3-5-sonnet-20240620",
+        "google/gemini-2.0-flash"
     ]
 else:
-    MODELS = ["azure-openai/gpt-4o"]
+    MODELS = ["openai/gpt-4o"]
 
 
 st.set_page_config(
@@ -87,11 +88,15 @@ openai_api_key = os.getenv("OPENAI_API_KEY")
 st.session_state.openai_api_key = openai_api_key
 anthropic_api_key = os.getenv("ANTHROPIC_API_KEY")
 st.session_state.anthropic_api_key = anthropic_api_key
+gemini_api_key = os.getenv("GEMINI_API_KEY")
+st.session_state.gemini_api_key = gemini_api_key
 
 # --- Main Content ---
 # Checking if the user has introduced the OpenAI API Key, if not, a warning is displayed
 missing_openai = openai_api_key == "" or openai_api_key is None or "sk-" not in openai_api_key
 missing_anthropic = anthropic_api_key == "" or anthropic_api_key is None
+missing_gemini = gemini_api_key == "" or gemini_api_key is None
+
 if missing_openai and missing_anthropic and ("AZ_OPENAI_API_KEY" not in os.environ):
     st.write("#")
     st.warning("⬅️ Please introduce an API Key to continue...")
@@ -105,6 +110,8 @@ else:
             if "openai" in model and not missing_openai:
                 models.append(model)
             elif "anthropic" in model and not missing_anthropic:
+                models.append(model)
+            elif "gemini" in model and not missing_gemini:
                 models.append(model)
 
         st.selectbox(
@@ -162,8 +169,15 @@ else:
         llm_stream = ChatAnthropic(
             api_key=anthropic_api_key,
             model=st.session_state.model.split("/")[-1],
-            temperature=0.9,
+            temperature=0.2,
             streaming=True,
+        )
+    elif model_provider == "google":
+        llm_stream = ChatGoogleGenerativeAI(
+            api_key=gemini_api_key,
+            model="gemini-2.0-flash",
+            temperature=0.2,
+            streaming=True
         )
 
     for message in st.session_state.messages:

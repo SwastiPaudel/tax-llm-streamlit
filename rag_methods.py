@@ -65,8 +65,8 @@ def load_doc_to_db():
                         st.toast(f"Error loading document {doc_file.name}: {e}", icon="⚠️")
                         print(f"Error loading document {doc_file.name}: {e}")
                     
-                    finally:
-                        os.remove(file_path)
+                    # finally:
+                    #     os.remove(file_path)
 
                 else:
                     st.error(F"Maximum number of documents reached ({DB_DOCS_LIMIT}).")
