@@ -2,6 +2,9 @@ import os
 import dotenv
 from time import time
 import streamlit as st
+from typing_extensions import Annotated, TypedDict
+from typing import List
+import json
 
 from langchain_community.document_loaders.text import TextLoader
 from langchain_community.document_loaders import (
@@ -12,15 +15,15 @@ from langchain_community.document_loaders import (
 # pip install docx2txt, pypdf
 from langchain_community.vectorstores import Chroma
 from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain_openai import OpenAIEmbeddings, AzureOpenAIEmbeddings
+from langchain_core.runnables import RunnablePassthrough
+from langchain_openai import OpenAIEmbeddings
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
-from langchain.chains import create_history_aware_retriever, create_retrieval_chain
-from langchain.chains.combine_documents import create_stuff_documents_chain
 
 dotenv.load_dotenv()
 
 os.environ["USER_AGENT"] = "myagent"
 DB_DOCS_LIMIT = 10
+
 
 # Function to stream the response of the LLM 
 def stream_llm_response(llm_stream, messages):
@@ -99,14 +102,7 @@ def load_url_to_db():
 
 
 def initialize_vector_db(docs):
-    if "AZ_OPENAI_API_KEY" not in os.environ:
-        embedding = OpenAIEmbeddings(api_key=st.session_state.openai_api_key)
-    else:
-        embedding = AzureOpenAIEmbeddings(
-            api_key=os.getenv("AZ_OPENAI_API_KEY"), 
-            model="text-embedding-3-large",
-            openai_api_version="2024-02-15-preview",
-        )
+    embedding = OpenAIEmbeddings(api_key=st.session_state.openai_api_key)
 
     vector_db = Chroma.from_documents(
         documents=docs,
@@ -139,43 +135,96 @@ def _split_and_load_docs(docs):
         st.session_state.vector_db.add_documents(document_chunks)
 
 
+class AnswerWithSources(TypedDict):
+    """An answer to the question, with sources."""
+
+    answer: Annotated[str, "Answer to the question"]
+    sources: Annotated[
+        List[str],
+        ...,
+        "List of sources used to answer the question",
+    ]
+
+
 # --- Retrieval Augmented Generation (RAG) Phase ---
+def format_docs(docs):
+    return "\n\n".join(doc.page_content for doc in docs)
 
-def _get_context_retriever_chain(vector_db, llm):
+
+def _get_context_retriever_chain(vector_db, llm, messages):
+    """Creates a context retriever chain that generates search queries based on conversation history."""
     retriever = vector_db.as_retriever()
-    prompt = ChatPromptTemplate.from_messages([
-        MessagesPlaceholder(variable_name="messages"),
-        ("user", "{input}"),
-        ("user", "Given the above conversation, generate a search query to look up in order to get information relevant to the conversation, "
-                 "focusing on the most recent messages."),
+
+    # Document processing prompt
+    response_prompt = ChatPromptTemplate.from_messages([
+        ("system", """You are a helpful tax assistant. Answer the user's query based on the retrieved documents.
+        If you don't know the answer, say so. Sources should be formatted [Page number, Topic Title, Document name] but 
+        not in the answers
+        """),
+        ("user", "Context information: {context}"),
+        ("user", "Question: {input}")
     ])
-    retriever_chain = create_history_aware_retriever(llm, retriever, prompt)
 
-    return retriever_chain
+    # Chain to generate answer with sources
+    rag_chain_from_docs = (
+            {
+                "input": lambda x: x["input"],  # input query
+                "context": lambda x: format_docs(x["context"]),
+            }
+            | response_prompt
+            | llm.with_structured_output(AnswerWithSources)
+    )
+
+    # Retrieve documents based on the latest message
+    retrieve_docs = (lambda x: x["input"]) | retriever
+
+    # Complete chain
+    chain = RunnablePassthrough.assign(context=retrieve_docs).assign(
+        answer=rag_chain_from_docs
+    )
+
+    return chain
 
 
-def get_conversational_rag_chain(llm):
-    retriever_chain = _get_context_retriever_chain(st.session_state.vector_db, llm)
+def get_conversational_rag_chain(llm, messages):
+    """Creates a conversational RAG chain that incorporates conversation history."""
+    return _get_context_retriever_chain(st.session_state.vector_db, llm, messages)
 
-    prompt = ChatPromptTemplate.from_messages([
-        ("system",
-        """You are a helpful tax assistant. You will have to answer to user's queries.
-        You will have some context to help with your answers, but now always would be completely related or helpful.
-        You can also use your knowledge to assist answering the user's queries.\n
-        {context}"""),
-        MessagesPlaceholder(variable_name="messages"),
-        ("user", "{input}"),
-    ])
-    stuff_documents_chain = create_stuff_documents_chain(llm, prompt)
 
-    return create_retrieval_chain(retriever_chain, stuff_documents_chain)
+def extract_answer(data):
+    """Extracts the 'answer' content from the response JSON."""
+    return data.get('answer', {}).get('answer', 'Answer not found')
+
+
+def get_sources(data):
+    return data.get('answer', {}).get('sources', 'sources not found')
 
 
 def stream_llm_rag_response(llm_stream, messages):
-    conversation_rag_chain = get_conversational_rag_chain(llm_stream)
-    response_message = "*(RAG Response)*\n"
-    for chunk in conversation_rag_chain.pick("answer").stream({"messages": messages[:-1], "input": messages[-1].content}):
-        response_message += chunk
-        yield chunk
+    """Streams a RAG response with sources."""
+    conversation_rag_chain = get_conversational_rag_chain(llm_stream, messages)
 
-    st.session_state.messages.append({"role": "assistant", "content": response_message})
+    # Get the response as stream
+    # response = conversation_rag_chain.pick('answer').stream({
+    #     "input": messages[-1].content,
+    #     "messages": messages[:-1]  # Previous messages for context
+    # })
+
+    response = conversation_rag_chain.invoke({
+        "input": messages[-1].content,
+        "messages": messages[:-1]  # Previous messages for context
+    })
+
+    # Initial setup for response display
+    response_text = extract_answer(response)
+    sources = get_sources(response)
+
+    st.write(
+        response_text
+    )
+
+    st.markdown(f"##### Sources")
+    for source in sources:
+        st.markdown(f"- **{source}**")
+
+    st.session_state.messages.append({"role": "assistant", "content": response_text})

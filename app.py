@@ -15,9 +15,7 @@ from langchain_google_genai  import ChatGoogleGenerativeAI
 
 from rag_methods import (
     load_doc_to_db, 
-    load_url_to_db,
-    stream_llm_response,
-    stream_llm_rag_response,
+    stream_llm_rag_response
 )
 
 dotenv.load_dotenv()
@@ -41,7 +39,6 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-
 # --- Header ---
 st.html("""<h2 style="text-align: center;"><i> Ask your Tax related questions? </i></h2>""")
 
@@ -59,31 +56,6 @@ if "messages" not in st.session_state:
 ]
 
 
-# --- Side Bar LLM API Tokens ---
-# with st.sidebar:
-    # if "AZ_OPENAI_API_KEY" not in os.environ:
-    #     default_openai_api_key = os.getenv("OPENAI_API_KEY") if os.getenv("OPENAI_API_KEY") is not None else ""  # only for development environment, otherwise it should return None
-    #     with st.popover("🔐 OpenAI"):
-    #         openai_api_key = st.text_input(
-    #             "Introduce your OpenAI API Key (https://platform.openai.com/)",
-    #             value=default_openai_api_key,
-    #             type="password",
-    #             key="openai_api_key",
-    #         )
-    #
-    #     default_anthropic_api_key = os.getenv("ANTHROPIC_API_KEY") if os.getenv("ANTHROPIC_API_KEY") is not None else ""
-    #     with st.popover("🔐 Anthropic"):
-    #         anthropic_api_key = st.text_input(
-    #             "Introduce your Anthropic API Key (https://console.anthropic.com/)",
-    #             value=default_anthropic_api_key,
-    #             type="password",
-    #             key="anthropic_api_key",
-    #         )
-    # else:
-    #     openai_api_key, anthropic_api_key = None, None
-    #     st.session_state.openai_api_key = None
-    #     az_openai_api_key = os.getenv("AZ_OPENAI_API_KEY")
-    #     st.session_state.az_openai_api_key = az_openai_api_key
 openai_api_key = os.getenv("OPENAI_API_KEY")
 st.session_state.openai_api_key = openai_api_key
 anthropic_api_key = os.getenv("ANTHROPIC_API_KEY")
@@ -162,7 +134,7 @@ else:
         llm_stream = ChatOpenAI(
             api_key=openai_api_key,
             model_name=st.session_state.model.split("/")[-1],
-            temperature=0.1,
+            temperature=0.2,
             streaming=True,
         )
     elif model_provider == "anthropic":
@@ -194,11 +166,8 @@ else:
             full_response = ""
 
             messages = [HumanMessage(content=m["content"]) if m["role"] == "user" else AIMessage(content=m["content"]) for m in st.session_state.messages]
-
-            if not st.session_state.use_rag:
-                st.write_stream(stream_llm_response(llm_stream, messages))
-            else:
-                st.write_stream(stream_llm_rag_response(llm_stream, messages))
+            with st.spinner(text="Getting your answer please wait..."):
+                stream_llm_rag_response(llm_stream, messages)
 
 
 with st.sidebar:
