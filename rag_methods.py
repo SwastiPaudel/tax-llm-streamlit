@@ -1,10 +1,8 @@
-import os
 import dotenv
 from time import time
 import streamlit as st
 from typing_extensions import Annotated, TypedDict
 from typing import List
-import json
 
 from langchain_community.document_loaders.text import TextLoader
 from langchain_community.document_loaders import (
@@ -12,17 +10,21 @@ from langchain_community.document_loaders import (
     PyPDFLoader, 
     Docx2txtLoader,
 )
-# pip install docx2txt, pypdf
 from langchain_community.vectorstores import Chroma
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_core.runnables import RunnablePassthrough
 from langchain_openai import OpenAIEmbeddings
-from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+from langchain_core.prompts import ChatPromptTemplate
+import os
+
+from db_service import store_training_files
 
 dotenv.load_dotenv()
 
 os.environ["USER_AGENT"] = "myagent"
 DB_DOCS_LIMIT = 10
+
+CHROMA_PATH = "vector_db"
 
 
 # Function to stream the response of the LLM 
@@ -35,8 +37,6 @@ def stream_llm_response(llm_stream, messages):
 
     st.session_state.messages.append({"role": "assistant", "content": response_message})
 
-
-# --- Indexing Phase ---
 
 def load_doc_to_db():
     # Use loader according to doc type
@@ -62,6 +62,7 @@ def load_doc_to_db():
                             continue
 
                         docs.extend(loader.load())
+                        store_training_files(doc_file.name)
                         st.session_state.rag_sources.append(doc_file.name)
 
                     except Exception as e:
@@ -101,24 +102,34 @@ def load_url_to_db():
                 st.error("Maximum number of documents reached (10).")
 
 
-def initialize_vector_db(docs):
-    embedding = OpenAIEmbeddings(api_key=st.session_state.openai_api_key)
+def initialize_vector_db():
+    embedding_func = OpenAIEmbeddings(api_key=st.session_state.openai_api_key)
 
-    vector_db = Chroma.from_documents(
-        documents=docs,
-        embedding=embedding,
-        collection_name=f"{str(time()).replace('.', '')[:14]}_" + st.session_state['session_id'],
+    # Initialize Chroma vector database
+    vector_db = Chroma(
+        embedding_function=embedding_func,
+        persist_directory=CHROMA_PATH
     )
 
-    # We need to manage the number of collections that we have in memory, we will keep the last 20
     chroma_client = vector_db._client
     collection_names = sorted([collection.name for collection in chroma_client.list_collections()])
     print("Number of collections:", len(collection_names))
-    while len(collection_names) > 20:
+
+    while len(collection_names) > 30:  # Adjust if needed
         chroma_client.delete_collection(collection_names[0])
         collection_names.pop(0)
 
     return vector_db
+
+
+def load_docs_to_db(docs):
+    db = Chroma.from_documents(
+        documents=docs,
+        embedding=OpenAIEmbeddings(),
+        persist_directory=CHROMA_PATH,
+    )
+
+    db.persist()
 
 
 def _split_and_load_docs(docs):
@@ -130,9 +141,10 @@ def _split_and_load_docs(docs):
     document_chunks = text_splitter.split_documents(docs)
 
     if "vector_db" not in st.session_state:
-        st.session_state.vector_db = initialize_vector_db(docs)
-    else:
-        st.session_state.vector_db.add_documents(document_chunks)
+        st.session_state.vector_db = initialize_vector_db()
+
+    load_docs_to_db(document_chunks)
+    st.session_state.vector_db.add_documents(document_chunks)
 
 
 class AnswerWithSources(TypedDict):
@@ -224,7 +236,9 @@ def stream_llm_rag_response(llm_stream, messages):
     )
 
     st.markdown(f"##### Sources")
-    for source in sources:
-        st.markdown(f"- **{source}**")
+
+    if not len(sources) < 1:
+        for source in sources:
+            st.markdown(f"- **{source}**")
 
     st.session_state.messages.append({"role": "assistant", "content": response_text})

@@ -14,9 +14,12 @@ from langchain.schema import HumanMessage, AIMessage
 from langchain_google_genai  import ChatGoogleGenerativeAI
 
 from rag_methods import (
-    load_doc_to_db, 
-    stream_llm_rag_response
+    load_doc_to_db,
+    stream_llm_rag_response,
+    initialize_vector_db,
 )
+
+from db_service import get_training_file_names
 
 dotenv.load_dotenv()
 
@@ -47,9 +50,6 @@ st.html("""<h2 style="text-align: center;"><i> Ask your Tax related questions? <
 if "session_id" not in st.session_state:
     st.session_state.session_id = str(uuid.uuid4())
 
-if "rag_sources" not in st.session_state:
-    st.session_state.rag_sources = []
-
 if "messages" not in st.session_state:
     st.session_state.messages = [
         {"role": "assistant", "content": "Hi there! How can I assist you today?"}
@@ -68,6 +68,20 @@ st.session_state.gemini_api_key = gemini_api_key
 missing_openai = openai_api_key == "" or openai_api_key is None or "sk-" not in openai_api_key
 missing_anthropic = anthropic_api_key == "" or anthropic_api_key is None
 missing_gemini = gemini_api_key == "" or gemini_api_key is None
+
+is_vector_db_loaded = ("vector_db" in st.session_state and st.session_state.vector_db is not None)
+
+if not is_vector_db_loaded:
+    st.session_state.vector_db = initialize_vector_db()
+    is_vector_db_loaded = True
+
+if "rag_sources" not in st.session_state:
+    print("Loading training files...")
+    st.session_state.rag_sources = []
+    st.session_state.rag_sources.extend(get_training_file_names())
+
+    print(st.session_state.rag_sources)
+
 
 if missing_openai and missing_anthropic and ("AZ_OPENAI_API_KEY" not in os.environ):
     st.write("#")
@@ -94,7 +108,6 @@ else:
 
         cols0 = st.columns(2)
         with cols0[0]:
-            is_vector_db_loaded = ("vector_db" in st.session_state and st.session_state.vector_db is not None)
             st.toggle(
                 "Use RAG", 
                 value=is_vector_db_loaded, 
@@ -123,6 +136,8 @@ else:
         #     on_change=load_url_to_db,
         #     key="rag_url",
         # )
+
+        print(is_vector_db_loaded)
 
         with st.expander(f"📚 Documents in DB ({0 if not is_vector_db_loaded else len(st.session_state.rag_sources)})"):
             st.write([] if not is_vector_db_loaded else [source for source in st.session_state.rag_sources])
