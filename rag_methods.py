@@ -22,7 +22,7 @@ from db_service import store_training_files
 dotenv.load_dotenv()
 
 os.environ["USER_AGENT"] = "myagent"
-DB_DOCS_LIMIT = 10
+DB_DOCS_LIMIT = 50
 
 CHROMA_PATH = "vector_db"
 
@@ -78,6 +78,27 @@ def load_doc_to_db():
         if docs:
             _split_and_load_docs(docs)
             st.toast(f"Document *{str([doc_file.name for doc_file in st.session_state.rag_docs])[1:-1]}* loaded successfully.", icon="✅")
+
+
+@st.dialog("Are you sure you want to clear the database? This action cannot be undone.")
+def clear_db():
+    if st.button("Yes, clear the database"):
+        if "vector_db" in st.session_state:
+            client = st.session_state.vector_db._client
+            collections = client.list_collections()
+
+            # Delete each collection
+            for collection in collections:
+                try:
+                    client.delete_collection(name=collection.name)
+                    print(f"Deleted collection: {collection.name}")
+                except Exception as e:
+                    print(f"Error deleting collection {collection.name}: {e}")
+
+            print("All collections have been deleted.")
+            st.session_state.rag_sources = []
+
+            st.success("Database cleared successfully. Please close the dialog and reload the page.")
 
 
 def load_url_to_db():

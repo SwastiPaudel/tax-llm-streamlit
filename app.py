@@ -16,7 +16,7 @@ from langchain_google_genai  import ChatGoogleGenerativeAI
 from rag_methods import (
     load_doc_to_db,
     stream_llm_rag_response,
-    initialize_vector_db,
+    initialize_vector_db, clear_db,
 )
 
 from db_service import get_training_file_names
@@ -137,10 +137,11 @@ else:
         #     key="rag_url",
         # )
 
-        print(is_vector_db_loaded)
-
         with st.expander(f"📚 Documents in DB ({0 if not is_vector_db_loaded else len(st.session_state.rag_sources)})"):
             st.write([] if not is_vector_db_loaded else [source for source in st.session_state.rag_sources])
+
+        st.button("Clear Database", on_click=lambda: clear_db(), type="primary")
+
 
     
     # Main chat app
