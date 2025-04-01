@@ -11,25 +11,23 @@ if os.name == 'posix':
 from langchain_openai import ChatOpenAI
 from langchain_anthropic import ChatAnthropic
 from langchain.schema import HumanMessage, AIMessage
-from langchain_google_genai  import ChatGoogleGenerativeAI
+from langchain_deepseek import ChatDeepSeek
 
 from rag_methods import (
     load_doc_to_db,
     stream_llm_rag_response,
-    initialize_vector_db, clear_db,
+    initialize_vector_db, clear_db
 )
 
 from db_service import get_training_file_names
 
-dotenv.load_dotenv()
+dotenv.load_dotenv(override=True)
 
 if "AZ_OPENAI_API_KEY" not in os.environ:
     MODELS = [
-        # "openai/o1-mini",
         "openai/gpt-4o",
-        # "openai/gpt-4o-mini",
         "anthropic/claude-3-5-sonnet-20240620",
-        "google/gemini-2.0-flash"
+        "deepseek/chat",
     ]
 else:
     MODELS = ["openai/gpt-4o"]
@@ -60,14 +58,14 @@ openai_api_key = os.getenv("OPENAI_API_KEY")
 st.session_state.openai_api_key = openai_api_key
 anthropic_api_key = os.getenv("ANTHROPIC_API_KEY")
 st.session_state.anthropic_api_key = anthropic_api_key
-gemini_api_key = os.getenv("GEMINI_API_KEY")
-st.session_state.gemini_api_key = gemini_api_key
+deepseek_api_key = os.getenv("DEEPSEEK_API_KEY")
+st.session_state.gemini_api_key = deepseek_api_key
 
 # --- Main Content ---
 # Checking if the user has introduced the OpenAI API Key, if not, a warning is displayed
 missing_openai = openai_api_key == "" or openai_api_key is None or "sk-" not in openai_api_key
 missing_anthropic = anthropic_api_key == "" or anthropic_api_key is None
-missing_gemini = gemini_api_key == "" or gemini_api_key is None
+missing_deepseek = deepseek_api_key == "" or deepseek_api_key is None
 
 is_vector_db_loaded = ("vector_db" in st.session_state and st.session_state.vector_db is not None)
 
@@ -97,7 +95,7 @@ else:
                 models.append(model)
             elif "anthropic" in model and not missing_anthropic:
                 models.append(model)
-            elif "gemini" in model and not missing_gemini:
+            elif "deepseek" in model and not missing_deepseek:
                 models.append(model)
 
         st.selectbox(
@@ -160,12 +158,13 @@ else:
             temperature=0.2,
             streaming=True,
         )
-    elif model_provider == "google":
-        llm_stream = ChatGoogleGenerativeAI(
-            api_key=gemini_api_key,
-            model="gemini-2.0-flash",
+    elif model_provider == "deepseek":
+        llm_stream = ChatDeepSeek(
+            api_key=deepseek_api_key,
+            model="deepseek-chat",
             temperature=0.2,
-            streaming=True
+            timeout=None,
+            max_retries=1,
         )
 
     for message in st.session_state.messages:
@@ -183,8 +182,8 @@ else:
 
             messages = [HumanMessage(content=m["content"]) if m["role"] == "user" else AIMessage(content=m["content"]) for m in st.session_state.messages]
             with st.spinner(text="Getting your answer please wait..."):
-                stream_llm_rag_response(llm_stream, messages)
-
+                response, context, source = stream_llm_rag_response(llm_stream, messages)
+                st.session_state.messages.append({"role": "assistant", "content": response})
 
 with st.sidebar:
     st.divider()
