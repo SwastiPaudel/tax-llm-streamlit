@@ -236,6 +236,7 @@ def _get_context_retriever_chain(vector_db, llm, messages):
             | llm.with_structured_output(AnswerWithSources)
     )
 
+    print("RAG chain created. Adding chat history...")
     # Complete chain
     chain = (
         RunnablePassthrough
