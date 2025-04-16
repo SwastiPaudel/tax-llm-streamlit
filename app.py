@@ -170,6 +170,11 @@ else:
     for message in st.session_state.messages:
         with st.chat_message(message["role"]):
             st.markdown(message["content"])
+            if message["role"] == "assistant":
+                message_placeholder = st.empty()
+                full_response = ""
+                if message.get("source") is not None:
+                    st.markdown(f"**Source:** {message.get('source', '')}")
 
     if prompt := st.chat_input("Your message"):
         st.session_state.messages.append({"role": "user", "content": prompt})
@@ -183,7 +188,7 @@ else:
             messages = [HumanMessage(content=m["content"]) if m["role"] == "user" else AIMessage(content=m["content"]) for m in st.session_state.messages]
             with st.spinner(text="Getting your answer please wait..."):
                 response, context, source = stream_llm_rag_response(llm_stream, messages)
-                st.session_state.messages.append({"role": "assistant", "content": response})
+                st.session_state.messages.append({"role": "assistant", "content": response, "source": source})
 
 with st.sidebar:
     st.divider()

@@ -1,6 +1,7 @@
 import dotenv
 from time import time
 import streamlit as st
+from langchain.chains.history_aware_retriever import create_history_aware_retriever
 from pydantic.v1 import BaseModel, Field
 from typing_extensions import Annotated, TypedDict
 from typing import List
@@ -15,7 +16,7 @@ from langchain_community.vectorstores import Chroma
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_core.runnables import RunnablePassthrough, RunnableLambda
 from langchain_openai import OpenAIEmbeddings
-from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder, PromptTemplate
 import os
 
 from db_service import store_training_files
@@ -136,7 +137,7 @@ def initialize_vector_db():
     )
 
     chroma_client = vector_db._client
-    collection_names = sorted(chroma_client.list_collections())
+    collection_names = chroma_client.list_collections()
     print("Number of collections:", len(collection_names))
 
     while len(collection_names) > 30:  # Adjust if needed
@@ -187,14 +188,38 @@ def format_docs(docs):
     docs = "\n\n".join(doc.page_content for doc in docs)
     return docs
 
+def format_chat_history(messages):
+    # change from list to a dict
+    chat_history = []
+    for message in messages:
+        if message["role"] == "user":
+            chat_history.append(f"User: {message['content']}")
+        else:
+            chat_history.append(f"Assistant: {message['content']}")
+    return "\n".join(chat_history)
+
 
 def _get_context_retriever_chain(vector_db, llm, messages):
     """Creates a context retriever chain that generates search queries based on conversation history."""
     retriever = vector_db.as_retriever()
+    history_aware_prompt = PromptTemplate.from_template("""
+    Given the following chat history and a follow-up user question, rephrase the follow-up question to be a standalone question.
 
+    Chat History:
+    {chat_history}
+
+    Follow-up input: {input}
+    Standalone question:
+    """)
+
+    retriever_with_memory = create_history_aware_retriever(
+        llm=llm,
+        retriever=retriever,
+        prompt=history_aware_prompt
+    )
     # Document processing prompt
     response_prompt = ChatPromptTemplate.from_messages([
-        ("system", """You are a helpful tax assistant. Answer the user's query based on the retrieved documents.
+        ("system", """You are a helpful tax assistant. Answer the user's query based on the retrieved documents and the chat history.
         If you don't know the answer, say so. Sources should be formatted [Page number, Topic Title, Document name] but 
         not in the answers. Also, please always provide the sources used to answer the question. Don't answer without source"""),
         ("user", "Context information: {context}"),
@@ -211,14 +236,17 @@ def _get_context_retriever_chain(vector_db, llm, messages):
             | llm.with_structured_output(AnswerWithSources)
     )
 
-    # Retrieve documents based on the latest message
-    retrieve_docs = (lambda x: x["input"]) | retriever
-
     # Complete chain
-    chain = RunnablePassthrough.assign(context=retrieve_docs).assign(
-        answer=rag_chain_from_docs
+    chain = (
+        RunnablePassthrough
+        .assign(
+            context=RunnableLambda(lambda x: retriever_with_memory.invoke({
+                "chat_history": x["messages"],
+                "input": x["input"]
+            }))
+        )
+        .assign(answer=rag_chain_from_docs)
     )
-
     return chain
 
 
@@ -258,7 +286,8 @@ def stream_llm_rag_response(llm_stream, messages):
 
     response = conversation_rag_chain.invoke({
         "input": messages[-1].content,
-        "messages": messages[:-1]  # Previous messages for context
+        "messages": messages[:-1],
+        "chat_history": messages[:-1],  # Previous messages for context
     })
 
     with open("response.txt", "a") as file:
@@ -273,14 +302,11 @@ def stream_llm_rag_response(llm_stream, messages):
         response_text
     )
 
-    with open("context.txt", "a") as file:
-        print(get_context_as_list(context), file=file)
-
-    st.markdown(f"##### Sources")
+    st.write(f"##### Sources")
 
     if not len(sources) < 1:
         for source in sources:
-            st.markdown(f"- **{source}**")
+            st.write(f"- **{source}**")
 
     return response_text, get_context_as_list(context), sources
 
